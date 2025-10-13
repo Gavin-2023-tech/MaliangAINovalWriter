@@ -310,6 +310,229 @@ deploy/
     docker compose -f deploy/open/docker-compose.yml down
     ```
 
+## 🇨🇳 国内部署指南
+
+由于网络环境问题，国内用户在部署时可能会遇到 Docker 镜像拉取失败的问题。本节提供针对国内用户的详细解决方案。
+
+### 问题症状
+
+在执行 `docker compose build` 时，可能会看到类似以下错误：
+
+```bash
+failed to solve: eclipse-temurin:21-jre: failed to resolve source metadata 
+for docker.io/library/eclipse-temurin:21-jre: 
+failed to do request: Head "https://alzgoonw.mirror.aliyuncs.com/v2/library/eclipse-temurin/manifests/21-jre?ns=docker.io": EOF
+```
+
+或者 MongoDB 连接失败的错误：
+
+```bash
+org.springframework.dao.DataAccessResourceFailureException: 
+Timed out while waiting for a server that matches ReadPreferenceServerSelector
+Connection refused to mongo:27017
+```
+
+### 解决方案
+
+#### 1. 配置 Docker 镜像源（推荐）
+
+**Windows 用户 (Docker Desktop)**:
+
+1. 打开 **Docker Desktop**
+2. 点击右上角的 **⚙️ Settings（设置）**
+3. 在左侧菜单选择 **Docker Engine**
+4. 在右侧的 JSON 配置编辑器中，找到 `"registry-mirrors"` 部分并替换为：
+
+```json
+{
+  "builder": {
+    "gc": {
+      "defaultKeepStorage": "20GB",
+      "enabled": true
+    }
+  },
+  "experimental": false,
+  "registry-mirrors": [
+    "https://docker.mirrors.ustc.edu.cn",
+    "https://hub-mirror.c.163.com",
+    "https://registry.cn-hangzhou.aliyuncs.com"
+  ]
+}
+```
+
+5. 点击 **Apply & Restart（应用并重启）**
+6. 等待 Docker Desktop 重启完成
+
+**Linux 用户**:
+
+编辑 `/etc/docker/daemon.json` 文件（如果不存在则创建）：
+
+```bash
+sudo mkdir -p /etc/docker
+sudo tee /etc/docker/daemon.json <<-'EOF'
+{
+  "registry-mirrors": [
+    "https://docker.mirrors.ustc.edu.cn",
+    "https://hub-mirror.c.163.com",
+    "https://registry.cn-hangzhou.aliyuncs.com"
+  ]
+}
+EOF
+
+# 重启 Docker 服务
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+```
+
+**验证配置**:
+
+```bash
+# 查看镜像源配置
+docker info | grep -A 5 "Registry Mirrors"
+
+# 测试拉取镜像
+docker pull hello-world
+```
+
+#### 2. 预先拉取基础镜像
+
+如果镜像源对某些镜像仍然不稳定，可以先手动拉取基础镜像：
+
+```bash
+# 拉取 Java 运行时镜像
+docker pull eclipse-temurin:21-jre
+
+# 拉取 MongoDB 镜像
+docker pull mongo:8.0
+```
+
+
+### 完整部署流程（国内用户）
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/Deng-m1/MaliangAINovalWriter.git
+cd MaliangAINovalWriter
+
+# 2. 配置 Git 代理（如需要）
+git config --global http.proxy http://127.0.0.1:你的代理端口
+git config --global https.proxy http://127.0.0.1:你的代理端口
+
+# 3. 下载预编译文件
+# 从 GitHub Releases 下载 ainoval-server.jar
+# 放置到 deploy/dist/ 目录
+
+# 4. 配置环境变量
+cp deploy/open/production.env.example deploy/open/production.env
+# 编辑 production.env 文件，修改必要的配置
+
+# 5. 配置 Docker 镜像源（见上文）
+
+# 6. 预先拉取基础镜像（可选，但推荐）
+docker pull eclipse-temurin:21-jre
+docker pull mongo:8.0
+
+# 7. 构建项目镜像
+docker compose -f deploy/open/docker-compose.yml build
+
+# 8. 启动服务（会自动初始化 MongoDB 副本集）
+docker compose -f deploy/open/docker-compose.yml up -d
+
+# 9. 等待服务完全启动（约 90-120 秒，包括副本集初始化）
+sleep 120
+
+# 10. 验证部署
+curl http://localhost:18080/actuator/health
+# 应该返回: {"status":"UP"}
+```
+
+> **💡 提示**: 第一次启动会自动初始化 MongoDB 副本集，这个过程大约需要 60-90 秒。你可以通过以下命令查看初始化进度：
+> ```bash
+> docker compose -f deploy/open/docker-compose.yml logs -f mongo-init
+> ```
+
+### 常见问题排查
+
+#### Q1: 镜像拉取超时或 EOF 错误
+
+**问题**: Docker 无法从默认源或配置的镜像源拉取镜像。
+
+**解决方案**:
+1. 确认 Docker 镜像源配置正确（见上文）
+2. 尝试手动拉取基础镜像
+3. 如果有代理，确保 Docker Desktop 配置了正确的 HTTP/HTTPS 代理
+4. 尝试更换其他国内镜像源
+
+#### Q2: MongoDB 连接超时或拒绝连接
+
+**问题**: 应用启动后无法连接到 MongoDB。
+
+**解决方案**:
+1. 检查 MongoDB 容器是否正常运行：
+   ```bash
+   docker compose -f deploy/open/docker-compose.yml ps
+   ```
+2. 查看 MongoDB 初始化日志：
+   ```bash
+   docker compose -f deploy/open/docker-compose.yml logs mongo-init
+   ```
+3. 检查副本集状态：
+   ```bash
+   docker exec ainoval-mongo mongosh --quiet -u admin -p admin123 \
+     --authenticationDatabase admin --eval "rs.status()"
+   ```
+4. 确认 `production.env` 中的 MongoDB 连接字符串正确
+
+#### Q3: 服务启动后返回 503 或健康检查失败
+
+**问题**: 访问 `http://localhost:18080/actuator/health` 返回错误。
+
+**解决方案**:
+1. 等待更长时间（首次启动可能需要 90-120 秒，包括 MongoDB 副本集初始化）
+2. 查看副本集初始化进度：
+   ```bash
+   docker compose -f deploy/open/docker-compose.yml logs mongo-init
+   ```
+3. 查看应用日志寻找具体错误：
+   ```bash
+   docker compose -f deploy/open/docker-compose.yml logs -f ainoval
+   ```
+4. 确认所有必需的环境变量已正确配置
+
+#### Q4: Git 克隆失败
+
+**问题**: `git clone` 时连接超时或失败。
+
+**解决方案**:
+```bash
+# 配置 Git 使用代理
+git config --global http.proxy http://127.0.0.1:你的代理端口
+git config --global https.proxy http://127.0.0.1:你的代理端口
+
+# 或使用 SSH 方式克隆
+git clone git@github.com:Deng-m1/MaliangAINovalWriter.git
+```
+
+### 验证部署成功
+
+执行以下命令验证所有服务正常运行：
+
+```bash
+# 检查容器状态
+docker compose -f deploy/open/docker-compose.yml ps
+
+# 应该看到两个容器都在运行：
+# NAME             STATUS
+# ainoval-mongo    Up (healthy)
+# ainoval-server   Up
+
+# 检查健康状态（应返回 {"status":"UP"}）
+curl http://localhost:18080/actuator/health
+
+# 在浏览器中访问
+# http://localhost:18080/
+```
+
 ## 🎨 使用场景
 
 -   **个人作者**:
