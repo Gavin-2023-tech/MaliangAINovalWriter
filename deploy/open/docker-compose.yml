@@ -9,7 +9,6 @@ services:
     volumes:
       - mongo-data:/data/db
       - mongo-config:/data/configdb
-      - ./mongo-init-replica.js:/docker-entrypoint-initdb.d/mongo-init-replica.js:ro
       - ./mongo-keyfile:/data/keyfile
     environment:
       # 开发环境使用简单的用户名密码
@@ -19,11 +18,22 @@ services:
     entrypoint: ["bash", "-c"]
     command: ["chmod 600 /data/keyfile && chown mongodb:mongodb /data/keyfile && exec docker-entrypoint.sh mongod --quiet --replSet rs0 --keyFile /data/keyfile --bind_ip_all"]
     healthcheck:
-      test: ["CMD-SHELL", "mongosh --quiet -u admin -p admin123 --authenticationDatabase admin --eval \"rs.status().ok\" || mongosh --quiet -u admin -p admin123 --authenticationDatabase admin --eval \"db.adminCommand('ping').ok\" || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 30s
+      test: ["CMD-SHELL", "mongosh --quiet -u admin -p admin123 --authenticationDatabase admin --eval \"db.adminCommand('ping').ok\" || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  mongo-init:
+    image: mongo:8.0
+    container_name: ainoval-mongo-init
+    restart: "no"
+    volumes:
+      - ./init-replica.sh:/init-replica.sh:ro
+    entrypoint: ["/bin/bash", "/init-replica.sh"]
+    depends_on:
+      mongo:
+        condition: service_healthy
 
   ainoval:
     image: ainoval/ainoval-server:latest
@@ -50,6 +60,8 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
 
 volumes:
   mongo-data:

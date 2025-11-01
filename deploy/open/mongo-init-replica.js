@@ -23,7 +23,7 @@ try {
         members: [
             {
                 _id: 0,
-                host: "ainoval-mongo:27017",
+                host: "mongo:27017",
                 priority: 1
             }
         ]
